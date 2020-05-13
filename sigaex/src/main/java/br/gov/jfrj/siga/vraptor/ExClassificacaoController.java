@@ -126,7 +126,7 @@ public class ExClassificacaoController
 		final List<ExClassificacao>[] classificacoesDoNivel = new List[getTotalDeNiveis()];
 		for (int i = 0; i < listaNiveis.length; i++) {
 			listaNiveis[i] = String.valueOf(i);
-			nomeNivel[i] = listaNomes.get(i + 1);
+			nomeNivel[i] = listaNomes.get(i);
 			classificacoesDoNivel[i] = getClassificacoesDoNivel(i);
 		}
 
@@ -488,7 +488,7 @@ public class ExClassificacaoController
 
 		// se lista do nível anterior está definido, carrega lista baseando-se
 		// na anterior
-		if (nivelSelecionado != null && nivelSelecionado.length > (nivel - 1)) {
+		if (nivelSelecionado != null && nivelSelecionado.length > (nivel)) {
 			String nivelListaAnterior = nivelSelecionado[nivel - 1];
 			if (nivelListaAnterior != null && !nivelListaAnterior.equals("-1")) {
 				return ExDao.getInstance().listarExClassificacaoPorNivel(

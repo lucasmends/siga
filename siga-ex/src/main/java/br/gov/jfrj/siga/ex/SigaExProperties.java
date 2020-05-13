@@ -287,5 +287,11 @@ public class SigaExProperties extends ModeloPropriedade {
 		return !"inativa".equals(s); 
 	}
 	
-
+	public static List<String> getExClassificacaoNiveisRegEx() throws AplicacaoException{
+		try {
+		  return instance.obterPropriedadeLista("classificacao.mascara.regex.nivel");
+		} catch (Exception e) {
+		  throw new AplicacaoException("Não foi possível encontrar os nomes dos níveis da classificação documental no arquivo siga.properties. Ex: siga.ex.classificacao.mascara.nomeNivel.0 = Assunto");
+		}
+	  }
 }

@@ -24,7 +24,6 @@
  */
 package br.gov.jfrj.siga.hibernate;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
@@ -35,7 +34,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Calendar;
+import java.util.Collections;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
@@ -44,16 +43,16 @@ import net.sf.ehcache.Cache;
 import net.sf.ehcache.CacheManager;
 import net.sf.ehcache.config.CacheConfiguration;
 
-import org.hibernate.CacheMode;
 import org.hibernate.Criteria;
-import org.hibernate.FlushMode;
 import org.hibernate.Query;
 import org.hibernate.SQLQuery;
-import org.hibernate.Transaction;
 import org.hibernate.cfg.Configuration;
+import org.hibernate.criterion.Criterion;
+import org.hibernate.criterion.MatchMode;
 import org.hibernate.criterion.Order;
 import org.hibernate.criterion.Restrictions;
 import org.hibernate.jdbc.Work;
+import org.hibernate.type.StandardBasicTypes;
 import org.jboss.logging.Logger;
 
 import br.gov.jfrj.siga.base.AplicacaoException;
@@ -89,7 +88,6 @@ import br.gov.jfrj.siga.ex.ExTipoMobil;
 import br.gov.jfrj.siga.ex.ExTipoMovimentacao;
 import br.gov.jfrj.siga.ex.ExTpDocPublicacao;
 import br.gov.jfrj.siga.ex.ExVia;
-import br.gov.jfrj.siga.ex.SigaExProperties;
 import br.gov.jfrj.siga.ex.BIE.ExBoletimDoc;
 import br.gov.jfrj.siga.ex.bl.Ex;
 import br.gov.jfrj.siga.ex.util.MascaraUtil;
@@ -97,7 +95,6 @@ import br.gov.jfrj.siga.hibernate.ext.IExMobilDaoFiltro;
 import br.gov.jfrj.siga.hibernate.ext.IMontadorQuery;
 import br.gov.jfrj.siga.model.Selecionavel;
 import br.gov.jfrj.siga.model.dao.ModeloDao;
-import br.gov.jfrj.siga.persistencia.Aguarde;
 import br.gov.jfrj.siga.persistencia.ExClassificacaoDaoFiltro;
 import br.gov.jfrj.siga.persistencia.ExDocumentoDaoFiltro;
 import br.gov.jfrj.siga.persistencia.ExMobilDaoFiltro;
@@ -1115,21 +1112,16 @@ public class ExDao extends CpDao {
 
 	public List<ExClassificacao> listarExClassificacaoPorNivel(String mascara,
 			String exceto) {
-		Query q = getSessao().getNamedQuery(
-				"consultarExClassificacaoComExcecao");
-		q.setString("mascara", mascara);
-		q.setString("exceto", exceto);
-		return q.list();
+		Criteria criteria = getSessao().createCriteria(ExClassificacao.class);
+		List classificacoes = criteria.add(Restrictions.sqlRestriction("regexp_like (codificacao, ?, 'i')", mascara, StandardBasicTypes.STRING)).add(Restrictions.not(Restrictions.eq("codificacao", exceto))).add(Restrictions.eq("hisAtivo", 1))
+			.addOrder(Order.asc("codificacao")).list();
+	
+		return classificacoes;
 
 	}
 
 	public List<ExClassificacao> listarExClassificacaoPorNivel(String mascara) {
-		Query q = getSessao().getNamedQuery(
-				"consultarExClassificacaoPorMascara");
-		q.setString("mascara", mascara);
-		q.setString("descrClassificacao", "");
-		return q.list();
-
+		return consultarExClassificacao(mascara, "");
 	}
 
 	public List<ExClassificacao> consultarPorFiltro(
@@ -1140,45 +1132,48 @@ public class ExDao extends CpDao {
 	public List<ExClassificacao> consultarPorFiltro(
 			final ExClassificacaoDaoFiltro flt, final int offset,
 			final int itemPagina) {
-		String descrClassificacao = "";
+	    List<Criterion> criterions = new ArrayList<>();
+	    String descrClassificacao = "";
+	    MascaraUtil util = MascaraUtil.getInstance();
 
-		MascaraUtil m = MascaraUtil.getInstance();
+	    if (flt.getDescricao() != null) {
+	      String d = flt.getDescricao();
 
-		if (flt.getDescricao() != null) {
-			String d = flt.getDescricao();
-			if (d.length() > 0 && m.isCodificacao(d)) {
-				descrClassificacao = m.formatar(d);
-			} else {
-				descrClassificacao = d;
-			}
-		}
+	      if (d.length() > 0 && util.isCodificacao(d)) {
+	        descrClassificacao = util.formatar(d);
+	        criterions.add(Restrictions.eq("codificacao", descrClassificacao));
+	      } else {
+	        descrClassificacao = d;
+	        String descrClassificacaoSemAcentoEmMaiusculas = Texto.removeAcentoMaiusculas(descrClassificacao);
+	        criterions.add(Restrictions.or(Restrictions.ilike("descrClassificacao", descrClassificacao, MatchMode.ANYWHERE), Restrictions.ilike("descrClassificacao", descrClassificacaoSemAcentoEmMaiusculas, MatchMode.ANYWHERE)));
+	      }
+	    }
 
-		final Query query = getSessao().getNamedQuery(
-				"consultarPorFiltroExClassificacao");
-		if (offset > 0) {
-			query.setFirstResult(offset);
-		}
-		if (itemPagina > 0) {
-			query.setMaxResults(itemPagina);
-		}
+	    String sql = "regexp_like (codificacao, ?, 'i')";
 
-		if (flt.getSigla() == null || flt.getSigla().equals("")) {
-			query.setString("mascara", MascaraUtil.getInstance()
-					.getMscTodosDoMaiorNivel());
-		} else {
-			query.setString(
-					"mascara",
-					MascaraUtil.getInstance().getMscFilho(
-							flt.getSigla().toString(), true));
-		}
+	    if (flt.getSigla() == null || flt.getSigla().equals("")) {
+	      String pattern = util.getMascaraEntrada();
+	      criterions.add(Restrictions.sqlRestriction(sql, pattern, StandardBasicTypes.STRING));
+	    } else {
+	      String pattern = util.getMscFilho(flt.getSigla().toString(), true);
+	      criterions.add(Restrictions.sqlRestriction(sql, pattern, StandardBasicTypes.STRING));
+	    }
 
-		query.setString("descrClassificacao", descrClassificacao.toUpperCase()
-				.replace(' ', '%'));
-		query.setString("descrClassificacaoSemAcento", Texto
-				.removeAcentoMaiusculas(descrClassificacao).replace(' ', '%'));
+	    criterions.add(Restrictions.eq("hisAtivo", 1));
 
-		final List<ExClassificacao> l = query.list();
-		return l;
+	    Criteria criteria = getSessao().createCriteria(ExClassificacao.class);
+
+	    if (offset > 0)
+	      criteria.setFirstResult(offset);
+
+	    if (itemPagina > 0)
+	      criteria.setMaxResults(itemPagina);
+
+	    for (Criterion criterion : criterions)
+	      criteria = criteria.add(criterion);
+
+	    return criteria.setResultTransformer(Criteria.DISTINCT_ROOT_ENTITY).addOrder(Order.asc("codificacao")).list();
+		
 	}
 
 	public int consultarQuantidade(final ExClassificacaoDaoFiltro flt) {
@@ -1672,29 +1667,35 @@ public class ExDao extends CpDao {
 
 	public List<ExClassificacao> consultarExClassificacaoVigente() {
 		return consultarExClassificacao(MascaraUtil.getInstance()
-				.getMscTodosDoMaiorNivel(), "");
+				.getMascaraEntrada(), "");
 	}
 
 	public List<ExClassificacao> consultarFilhos(ExClassificacao exClass,
 			boolean niveisAbaixo) {
-		final Query query = getSessao().getNamedQuery(
-				"consultarFilhosExClassificacao");
-		query.setString(
-				"mascara",
-				MascaraUtil.getInstance().getMscFilho(
-						exClass.getCodificacao().toString(), niveisAbaixo));
-
-		return query.list().subList(1, query.list().size());
+				String sql = "regexp_like (codificacao, ?, 'i')";
+				String mascara = MascaraUtil.getInstance().getMscFilho(exClass.getCodificacao().toString(), niveisAbaixo);
+				List<Criterion> criterions = new ArrayList<>();
+				criterions.add(Restrictions.sqlRestriction(sql, mascara, StandardBasicTypes.STRING));
+				criterions.add(Restrictions.not(Restrictions.eq("codificacao", exClass.getCodificacao())));
+				criterions.add(Restrictions.eq("hisAtivo", 1));
+			
+				Criteria criteria = getSessao().createCriteria(ExClassificacao.class);
+				
+				for (Criterion criterion : criterions)
+				  criteria = criteria.add(criterion);
+				
+				List<ExClassificacao> classificacoes = criteria.setResultTransformer(Criteria.DISTINCT_ROOT_ENTITY).addOrder(Order.asc("codificacao")).list();
+			
+				return Collections.unmodifiableList(classificacoes);
 	}
 
 	public List<ExClassificacao> consultarExClassificacao(String mascaraLike,
 			String descrClassificacao) {
-		Query q = getSessao().getNamedQuery(
-				"consultarExClassificacaoPorMascara");
-		q.setString("mascara", mascaraLike);
-		q.setString("descrClassificacao", descrClassificacao.toUpperCase());
-
-		return q.list();
+		Criteria criteria = getSessao().createCriteria(ExClassificacao.class);
+		List classificacoes = criteria.add(Restrictions.sqlRestriction("regexp_like (codificacao, ?, 'i')", mascaraLike, StandardBasicTypes.STRING)).add(Restrictions.ilike("descrClassificacao", descrClassificacao, MatchMode.ANYWHERE))
+			.add(Restrictions.eq("hisAtivo", 1)).addOrder(Order.asc("codificacao")).list();
+	
+		return classificacoes;
 	}
 
 	public ExClassificacao consultarExClassificacao(String codificacao) {
